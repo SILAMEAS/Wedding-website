@@ -12,6 +12,13 @@ describe("CSP", () => {
     expect(csp).not.toContain("unsafe-eval");
   });
 
+  it("allows WebAssembly compilation (not JS eval) only when asked, for the admin QR scanner", () => {
+    const admin = buildCsp("n", false, { allowWasm: true });
+    expect(admin).toContain("'wasm-unsafe-eval'");
+    expect(admin).not.toMatch(/'unsafe-eval'/);
+    expect(buildCsp("n", false)).not.toContain("wasm");
+  });
+
   it("only allows unsafe-eval in development", () => {
     expect(buildCsp("n", true)).toContain("'unsafe-eval'");
   });

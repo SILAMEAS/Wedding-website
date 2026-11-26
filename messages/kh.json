@@ -122,7 +122,11 @@
       "gifts": "ចំណងដៃដែលបានទទួល",
       "checkIn": "ចុះឈ្មោះមកដល់",
       "analytics": "ស្ថិតិ",
-      "exports": "ទាញយកទិន្នន័យ"
+      "exports": "ទាញយកទិន្នន័យ",
+      "sectionGuests": "ភ្ញៀវ",
+      "sectionWebsite": "គេហទំព័រ",
+      "sectionGifts": "ចំណងដៃ និងពាក្យជូនពរ",
+      "sectionRecords": "របាយការណ៍ និងគណនី"
     },
     "login": {
       "title": "ចូលគ្រប់គ្រង",

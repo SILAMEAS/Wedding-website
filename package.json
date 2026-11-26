@@ -19,7 +19,8 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate && node scripts/copy-vendor.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "7.0.5",

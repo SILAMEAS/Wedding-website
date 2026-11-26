@@ -17,7 +17,8 @@ const handleI18nRouting = createMiddleware(routing);
 
 export default function proxy(request: NextRequest) {
   const nonce = createNonce();
-  const csp = buildCsp(nonce, process.env.NODE_ENV === "development");
+  // WebAssembly (QR scanner) only in the admin area; admin pages navigate client-side, so allow it for all of /admin.
+  const csp = buildCsp(nonce, process.env.NODE_ENV === "development", { allowWasm: request.nextUrl.pathname.startsWith("/admin") });
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);

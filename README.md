@@ -38,6 +38,7 @@ npm run dev                 # http://localhost:3000 → /kh ; admin at http://lo
 | `npm run db:deploy` | Apply migrations in production (`prisma migrate deploy`) |
 | `npm run db:seed` | Seed (idempotent; never overwrites edited values) |
 | `npm run db:studio` | Prisma Studio |
+| `npm run smoke -- <url>` | Read-only post-deployment smoke test (health, security headers, auth walls, cron secret) |
 
 ## Admin account
 
@@ -106,6 +107,25 @@ Scheduled job: call `GET /api/cron/cleanup` with `Authorization: Bearer $CRON_SE
   pause/play button. Local media route supports byte ranges (required by Safari for audio).
 - Envelope letter now slides out of the envelope; reloading a new-invitation page no longer re-reveals the link; printing shows all
   sections; the generic home page links to gallery, wishes and venues.
+
+## Wedding day, reports and hardening (Phases 6–8)
+
+- **Check-in** (`/admin/check-in`): scan the invitation QR with the phone camera (decoder self-hosted, no CDN) or search by name/phone.
+  Shows the party, seats and reply; records how many people arrived. A second check-in of the same party, or of a switched-off
+  invitation, needs **Check in anyway** + a reason. Simultaneous scans at two doors are serialized (row lock): only one wins.
+  Mistakes are undone with a reason (kept in history). Arrivals appear on the dashboard.
+- **Analytics** (`/admin/analytics`): replies by answer and over time, invitations opened per day (bots excluded), guests by category,
+  confirmed gifts over time **as separate USD and KHR charts**, gifts by method. Every chart has a "Show as table" view.
+- **Downloads** (`/admin/exports`): Excel or CSV for guests, families, invitations, replies, arrivals, wishes and gifts. List pages
+  have the same buttons with the current filters. Money is in separate USD/KHR columns; links, tokens, screenshots and private
+  notes are never exported; spreadsheet formula injection is neutralised; every download is audited.
+- **Sortable tables**: guests, invitations and gifts sort on the server (the sort is in the URL, so it survives reloads and paging).
+- **Accessibility**: automated axe (WCAG 2.1 A/AA) scan of every public page in Khmer and English and of the admin pages runs in the
+  e2e suite. Gold text uses a darker accessible tone; reduced-motion users get no animation and no hydration mismatch.
+- **Security hardening**: `'wasm-unsafe-eval'` (needed by the QR decoder) is only sent on `/admin` pages; public pages keep the strict CSP.
+- **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Vercel + managed PostgreSQL + Cloudinary, roles, migrations, rollback,
+  monitoring, backup/restore) and [docs/OPERATIONS.md](docs/OPERATIONS.md) (how to run invitations, replies, gifts and the door on
+  the day). `vercel.json` sets the Singapore region and the daily cleanup cron.
 
 ## Project structure
 
@@ -178,10 +198,13 @@ Next.js 16's **Cache Components is intentionally disabled.** Nearly every page r
 
 ## Known limitations / setup values still required
 
-- **No wedding facts are configured yet**: date, events, venues, story, bank/KHQR details and contacts. They will be editable in the admin dashboard (Phases 4–6). Until then the landing page shows "date will be announced soon".
+- **Wedding facts are entered by you** in the admin (date, events, venues, story, bank/KHQR details, contacts). Nothing is invented; until they are entered the site says the date will be announced.
 - English transliterations of the couple's names are intentionally blank until the couple enters them.
-- Cloudinary is not configured. Development uses `MEDIA_STORAGE=local`, and production refuses to start without Cloudinary.
-- Shared admin account (Phase 3): audit logs will identify the shared account, **not** which partner acted.
+- Cloudinary must be configured for production (see docs/DEPLOYMENT.md). Development uses `MEDIA_STORAGE=local`, and production refuses to start without Cloudinary.
+- The Khmer interface text was written carefully but should be read once by a native speaker before invitations are sent.
+- Guest photo uploads with wishes are not implemented (wishes are text only).
+- `npm audit` reports 4 moderate advisories in a **development-only** tool dependency (`minimatch` via `ts-morph`); runtime dependencies have none (`npm audit --omit=dev`).
+- Shared admin account: audit logs identify the shared account, **not** which partner acted.
 
 ## Roadmap
 
@@ -192,6 +215,6 @@ Next.js 16's **Cache Components is intentionally disabled.** Nearly every page r
 | 3 Auth & core data (admin login, guests/groups, invitations, tokens, audit) | ✅ complete |
 | 4 Public experience (envelope, hero, story, events, gallery, locations) | ✅ complete |
 | 5 Guest interactions (RSVP, wishes, gifts) | ✅ complete |
-| 6 Admin dashboard (analytics, moderation, gifts, QR, check-in, exports) | next |
-| 7 Testing & hardening | |
-| 8 Deployment (backup/restore, monitoring, smoke tests) | |
+| 6 Admin dashboard (analytics, moderation, gifts, QR, check-in, exports) | ✅ complete |
+| 7 Testing & hardening (axe a11y, concurrency, security review) | ✅ complete |
+| 8 Deployment (docs, backup/restore, monitoring, smoke tests) | ✅ complete — see docs/DEPLOYMENT.md |

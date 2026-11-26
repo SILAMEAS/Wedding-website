@@ -1,11 +1,12 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
+import { usePrefersReducedMotion } from "@/lib/use-reduced-motion";
 import type { ReactNode } from "react";
 
 /** Gentle fade-up when scrolled into view. Disabled for prefers-reduced-motion. */
 export function Reveal({ children, className, delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
-  const reduce = useReducedMotion();
+  const reduce = usePrefersReducedMotion();
   if (reduce) return <div className={className}>{children}</div>;
   return (
     <motion.div

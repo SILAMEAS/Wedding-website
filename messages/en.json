@@ -122,7 +122,11 @@
       "gifts": "Gifts received",
       "checkIn": "Check-in",
       "analytics": "Analytics",
-      "exports": "Downloads"
+      "exports": "Downloads",
+      "sectionGuests": "Guests",
+      "sectionWebsite": "Website",
+      "sectionGifts": "Gifts & wishes",
+      "sectionRecords": "Reports & account"
     },
     "login": {
       "title": "Admin sign in",

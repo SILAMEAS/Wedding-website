@@ -16,7 +16,7 @@ const SERIES = "var(--wedding-purple)";
 const GRID = "var(--wedding-border)";
 const AXIS_TEXT = { fill: "var(--wedding-muted-strong)", fontSize: 12 };
 
-function ChartCard({ title, subtitle, empty, table, children }: { title: string; subtitle?: string; empty: boolean; table: ReactNode; children: ReactNode }) {
+function ChartCard({ title, subtitle, empty, table, children, height = 224 }: { title: string; subtitle?: string; empty: boolean; table: ReactNode; children: ReactNode; height?: number }) {
   const t = useTranslations("Admin.analytics");
   return (
     <Card>
@@ -29,7 +29,7 @@ function ChartCard({ title, subtitle, empty, table, children }: { title: string;
           <p className="flex h-48 items-center justify-center rounded-lg bg-muted/50 text-sm text-muted-foreground">{t("noData")}</p>
         ) : (
           <>
-            <div className="h-56 w-full" role="img" aria-label={title}>
+            <div className="w-full" style={{ height }} role="img" aria-label={title}>
               {children}
             </div>
             <details className="mt-2 text-sm">
@@ -89,6 +89,8 @@ export function CategoryBars({ title, subtitle, data, valueHeader, format = (v) 
       title={title}
       subtitle={subtitle}
       empty={empty}
+      // ~44px per bar row plus the axis, so one or two categories do not float in a tall box.
+      height={Math.max(120, data.length * 44 + 40)}
       table={<DataTable rows={data.map((d) => ({ label: d.label, value: format(d.value) }))} labelHeader={t("category")} valueHeader={valueHeader} />}
     >
       <ResponsiveContainer>
@@ -138,7 +140,7 @@ export function TimeSeries({ title, subtitle, data, valueHeader, format = (v) =>
             strokeWidth={2}
             fill={SERIES}
             fillOpacity={0.1}
-            dot={points.length === 1 ? { r: 4, fill: SERIES, stroke: "#fff", strokeWidth: 2 } : false}
+            dot={false}
             activeDot={{ r: 5, fill: SERIES, stroke: "#fff", strokeWidth: 2 }}
             isAnimationActive={false}
           />

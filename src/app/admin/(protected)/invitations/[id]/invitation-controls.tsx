@@ -28,6 +28,8 @@ export function LinkPanel({ invitationId, autoReveal = false }: { invitationId: 
   const { run, pending } = useAction();
   const [url, setUrl] = useState<string | null>(null);
   const revealedOnce = useRef(false);
+  // Remember "just created" after ?new=1 is removed from the URL below.
+  const [justCreated] = useState(autoReveal);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -48,7 +50,7 @@ export function LinkPanel({ invitationId, autoReveal = false }: { invitationId: 
   return (
     <Card className="border-soft-purple bg-lavender/40">
       <CardHeader>
-        <CardTitle className="font-serif text-xl text-purple-deep">{autoReveal ? t("newLinkReady") : t("link")}</CardTitle>
+        <CardTitle className="font-serif text-xl text-purple-deep">{justCreated ? t("newLinkReady") : t("link")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {url ? (

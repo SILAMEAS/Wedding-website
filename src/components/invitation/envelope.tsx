@@ -1,7 +1,8 @@
 "use client";
 
 import { Music2, Pause } from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { usePrefersReducedMotion } from "@/lib/use-reduced-motion";
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { openInvitationAction } from "@/server/actions/public-invitation.actions";
 
@@ -26,7 +27,7 @@ type Props = {
  * - prefers-reduced-motion: simple fade instead of the flap animation.
  */
 export function Envelope({ token, storageKey, greeting, invitedLine, coupleLine, openLabel, monogram, musicUrl, musicLabels, children }: Props) {
-  const reduce = useReducedMotion();
+  const reduce = usePrefersReducedMotion();
   const [phase, setPhase] = useState<"closed" | "opening" | "open">("closed");
   // Already opened in this browser session? (server snapshot: no)
   const seen = useSyncExternalStore(noopSubscribe, () => readSeen(storageKey), () => false);

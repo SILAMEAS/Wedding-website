@@ -27,6 +27,8 @@ const envSchema = z
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/, error: "DATABASE_URL must be a postgresql:// URL" }),
     DIRECT_URL: z.url({ protocol: /^postgres(ql)?$/ }).optional(),
+    // PEM of the database provider's CA (Aiven, RDS…). Used by src/lib/prisma/create-client.ts.
+    DATABASE_CA_CERT: z.string().includes("BEGIN CERTIFICATE", { message: "DATABASE_CA_CERT must be a PEM certificate" }).optional(),
     APP_URL: z.url({ protocol: /^https?$/, error: "APP_URL must be an http(s) URL" }),
     AUTH_SECRET: secret("AUTH_SECRET"),
     TOKEN_HASH_PEPPER: secret("TOKEN_HASH_PEPPER"),

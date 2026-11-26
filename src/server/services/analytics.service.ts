@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma/client";
+import { toPhnomPenhLocalInput } from "@/lib/dates";
 import type { AdminContext } from "@/server/context";
 
 /*
@@ -14,6 +15,33 @@ export type DayPoint = { day: string; value: number };
 function cumulative(points: DayPoint[]): DayPoint[] {
   let total = 0;
   return points.map((p) => ({ day: p.day, value: (total = new Prisma.Decimal(total).plus(p.value).toNumber()) }));
+}
+
+const DAY_MS = 86_400_000;
+const MAX_DAYS = 180;
+const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+
+/**
+ * Continuous day range from the day before the first point to today (Phnom Penh),
+ * so a single day still draws a line and quiet days are visible. Daily counts fill
+ * gaps with 0; running totals carry the last value forward.
+ */
+export function fillDays(points: DayPoint[], mode: "daily" | "running", today = toPhnomPenhLocalInput(new Date()).slice(0, 10)): DayPoint[] {
+  if (points.length === 0) return [];
+  const byDay = new Map(points.map((p) => [p.day, p.value]));
+  const lastPoint = points[points.length - 1]!.day;
+  const end = lastPoint > today ? lastPoint : today;
+  let start = addDays(points[0]!.day, -1);
+  if (Date.parse(end) - Date.parse(start) > MAX_DAYS * DAY_MS) start = addDays(end, -MAX_DAYS);
+  const out: DayPoint[] = [];
+  let carry = 0;
+  for (const p of points) if (p.day < start) carry = p.value; // running total before the window
+  for (let day = start; day <= end; day = addDays(day, 1)) {
+    const v = byDay.get(day);
+    if (mode === "running") carry = v ?? carry;
+    out.push({ day, value: mode === "running" ? carry : (v ?? 0) });
+  }
+  return out;
 }
 
 export async function getAnalytics(_ctx: AdminContext) {
@@ -44,7 +72,7 @@ export async function getAnalytics(_ctx: AdminContext) {
   const rsvpCount = (s: "ATTENDING" | "DECLINED" | "MAYBE") => rsvpGroups.find((g) => g.status === s)?._count._all ?? 0;
 
   const giftSeries = (currency: "USD" | "KHR") =>
-    cumulative(giftsByDay.filter((g) => g.currency === currency).map((g) => ({ day: g.day, value: Number(g.total) })));
+    fillDays(cumulative(giftsByDay.filter((g) => g.currency === currency).map((g) => ({ day: g.day, value: Number(g.total) }))), "running");
 
   const methodCounts = (["KHQR", "BANK_TRANSFER", "CASH", "OTHER"] as const).map((m) => ({
     key: m,
@@ -58,8 +86,8 @@ export async function getAnalytics(_ctx: AdminContext) {
       { key: "MAYBE", value: rsvpCount("MAYBE") },
       { key: "AWAITING", value: Math.max(0, liveInvitations - replied) },
     ],
-    opensByDay: opens.map((o) => ({ day: o.day, value: Number(o.n) })),
-    repliesByDay: cumulative(replies.map((r) => ({ day: r.day, value: Number(r.n) }))),
+    opensByDay: fillDays(opens.map((o) => ({ day: o.day, value: Number(o.n) })), "daily"),
+    repliesByDay: fillDays(cumulative(replies.map((r) => ({ day: r.day, value: Number(r.n) }))), "running"),
     categories: categories.map((c) => ({ key: c.category, value: c._count._all })).sort((a, b) => b.value - a.value),
     giftsUsd: giftSeries("USD"),
     giftsKhr: giftSeries("KHR"),

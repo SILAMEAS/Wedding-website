@@ -13,7 +13,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
 
   const sidebar = (
-    <div className="flex h-full flex-col gap-6 p-4">
+    <div className="flex h-full flex-col gap-5 overflow-y-auto p-4">
       <div className="px-3 pt-2">
         <p className="font-serif text-xl text-purple-deep">{t("brand")}</p>
         <p className="font-display text-sm text-gold-ink">សិលា & គឹមសួ</p>

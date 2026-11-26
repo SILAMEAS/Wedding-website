@@ -7,12 +7,12 @@
  *   injection is low risk compared with script injection.
  * - img/media: self + Cloudinary. frame-src: Google Maps embeds only.
  */
-export function buildCsp(nonce: string, isDev: boolean): string {
+export function buildCsp(nonce: string, isDev: boolean, opts: { allowWasm?: boolean } = {}): string {
   const directives: Record<string, string[]> = {
     "default-src": ["'self'"],
-    // 'wasm-unsafe-eval' lets the check-in scanner compile its self-hosted QR decoder
-    // (WebAssembly only; does not allow JavaScript eval).
-    "script-src": ["'self'", `'nonce-${nonce}'`, "'strict-dynamic'", "'wasm-unsafe-eval'", ...(isDev ? ["'unsafe-eval'"] : [])],
+    // 'wasm-unsafe-eval' (admin only) lets the check-in scanner compile its self-hosted
+    // QR decoder. It allows WebAssembly only, not JavaScript eval.
+    "script-src": ["'self'", `'nonce-${nonce}'`, "'strict-dynamic'", ...(opts.allowWasm ? ["'wasm-unsafe-eval'"] : []), ...(isDev ? ["'unsafe-eval'"] : [])],
     "style-src": ["'self'", "'unsafe-inline'"],
     "img-src": ["'self'", "blob:", "data:", "https://res.cloudinary.com"],
     "media-src": ["'self'", "blob:", "https://res.cloudinary.com"],

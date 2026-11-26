@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { AdminContext } from "@/server/context";
 import { AppError } from "@/server/errors";
-import { getAnalytics } from "@/server/services/analytics.service";
+import { fillDays, getAnalytics } from "@/server/services/analytics.service";
 import { checkInStats, confirmCheckIn, extractToken, lookupScan, searchParties, voidCheckIn } from "@/server/services/checkin.service";
 import { exportResource } from "@/server/services/export.service";
 import { verifyGift } from "@/server/services/gift-admin.service";
@@ -162,6 +162,21 @@ describe("exports", () => {
 });
 
 describe("analytics", () => {
+  it("fills a continuous day range: zeros for daily counts, carried totals for running sums", () => {
+    const pts = [
+      { day: "2026-11-24", value: 2 },
+      { day: "2026-11-26", value: 5 },
+    ];
+    expect(fillDays(pts, "daily", "2026-11-27").map((p) => p.value)).toEqual([0, 2, 0, 5, 0]);
+    expect(fillDays(pts, "running", "2026-11-27").map((p) => p.value)).toEqual([0, 2, 2, 5, 5]);
+    expect(fillDays(pts, "daily", "2026-11-27")[0]!.day).toBe("2026-11-23");
+    expect(fillDays([], "daily")).toEqual([]);
+    // Long histories are capped, keeping the running total from before the window.
+    const long = fillDays([{ day: "2025-01-01", value: 7 }], "running", "2026-11-26");
+    expect(long).toHaveLength(181);
+    expect(long[0]!.value).toBe(7);
+  });
+
   it("returns per-day series in Phnom Penh time with currencies separate", async () => {
     const { invitationId } = await invitation();
     const n = await createGiftNotification(invitationId, { donorName: "Dara", amount: "20", currency: "USD", method: "KHQR" });
