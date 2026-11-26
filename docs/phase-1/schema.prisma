@@ -1,0 +1,736 @@
+// =============================================================================
+// Sila & Kimsour Wedding Platform — Prisma schema (Phase 1 PROPOSAL)
+// -----------------------------------------------------------------------------
+// Constraints Prisma cannot express (owner XOR, partial unique indexes,
+// membership/capacity triggers, append-only tables) live in constraints.sql
+// and will be shipped as a hand-written migration in Phase 2.
+//
+// Conventions
+//   * UUID v7 primary keys (time-ordered, index-friendly)
+//   * All DateTime values are stored in UTC (timestamptz); displayed in
+//     Asia/Phnom_Penh.
+//   * Money: Decimal(18,2). Never Float. Currency stored per row.
+//   * Localized content: Json columns validated by Zod as { en: string, kh: string }.
+//   * Table names snake_case via @@map; column names snake_case via @map.
+//   * Financial / audit / history rows use onDelete: Restrict. No cascades into them.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 6: url/directUrl below. Prisma 7+: moved to prisma.config.ts.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum AdminRole {
+  OWNER // the shared couple account today
+  ADMIN // future: separate admin accounts
+  VIEWER // future: read-only helpers (e.g. check-in staff)
+}
+
+enum GuestCategory {
+  GROOM_FAMILY
+  BRIDE_FAMILY
+  FRIEND
+  COLLEAGUE
+  VIP
+  OTHER
+}
+
+enum GuestSide {
+  GROOM
+  BRIDE
+  BOTH
+}
+
+enum InvitationType {
+  INDIVIDUAL
+  FAMILY
+}
+
+enum InvitationStatus {
+  ACTIVE // link works
+  INACTIVE // temporarily disabled, can be re-activated
+  REVOKED // permanently cancelled
+}
+
+enum TokenStatus {
+  ACTIVE
+  ROTATED // replaced by a newer token
+  REVOKED
+}
+
+enum AccessKind {
+  LANDING // envelope screen rendered
+  OPENED // "Open Invitation" pressed
+  RSVP_VIEW
+  GIFT_VIEW
+}
+
+enum RsvpStatus {
+  ATTENDING
+  DECLINED
+  MAYBE
+}
+
+enum ActorType {
+  GUEST
+  ADMIN
+  SYSTEM
+}
+
+enum WishStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  HIDDEN // was approved, unpublished by admin
+  ARCHIVED
+}
+
+enum WishVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum Currency {
+  USD
+  KHR
+}
+
+enum GiftMethod {
+  KHQR
+  BANK_TRANSFER
+  CASH
+  OTHER
+}
+
+enum GiftSource {
+  GUEST_NOTIFICATION
+  ADMIN_RECORD
+}
+
+enum GiftStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+  CANCELLED
+}
+
+enum GiftEventType {
+  CREATED
+  VERIFIED
+  REJECTED
+  CANCELLED
+  CORRECTED // amount/currency/method/ref changed on a VERIFIED gift (reason required)
+  REOPENED // VERIFIED/REJECTED -> PENDING_VERIFICATION (reason required)
+  NOTE
+}
+
+enum PublishStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AlbumVisibility {
+  PUBLIC
+  INVITATION_ONLY
+  UNPUBLISHED
+}
+
+enum MediaPurpose {
+  GALLERY_PHOTO
+  SITE_IMAGE // hero, portraits, venue images, milestone images
+  KHQR_IMAGE
+  WISH_PHOTO
+  GIFT_EVIDENCE // private delivery type, admin-only signed URLs
+}
+
+enum MediaStatus {
+  PENDING // uploaded, not yet attached to a record
+  ATTACHED
+  DELETED
+}
+
+// ----------------------------------------------------------------------------
+// Admin & auth
+// ----------------------------------------------------------------------------
+
+model AdminUser {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  username          String    @unique // stored lower-case
+  displayName       String    @map("display_name")
+  passwordHash      String    @map("password_hash") // Argon2id encoded string
+  role              AdminRole @default(OWNER)
+  isActive          Boolean   @default(true) @map("is_active")
+  failedLoginCount  Int       @default(0) @map("failed_login_count")
+  lockedUntil       DateTime? @map("locked_until")
+  passwordChangedAt DateTime  @default(now()) @map("password_changed_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  sessions          AdminSession[]
+  auditLogs         AuditLog[]
+  rsvpHistory       RsvpHistory[]
+  giftEvents        GiftEvent[]
+  giftsVerified     Gift[]          @relation("GiftVerifiedBy")
+  giftsRecorded     Gift[]          @relation("GiftRecordedBy")
+  wishesModerated   Wish[]          @relation("WishModeratedBy")
+  checkIns          GuestCheckIn[]  @relation("CheckInBy")
+  checkInsVoided    GuestCheckIn[]  @relation("CheckInVoidedBy")
+  settingsUpdates   WeddingSettings[]
+
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  adminUserId String    @map("admin_user_id") @db.Uuid
+  tokenHash   String    @unique @map("token_hash") // SHA-256 of the random cookie value
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  userAgent   String?   @map("user_agent") // truncated, for "active sessions" list
+  ipHash      String?   @map("ip_hash") // HMAC(ip), never raw IP
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+// ----------------------------------------------------------------------------
+// Guests, groups, invitations
+// ----------------------------------------------------------------------------
+
+model GuestGroup {
+  id                    String        @id @default(uuid(7)) @db.Uuid
+  nameEn                String?       @map("name_en") // e.g. "The Sok Family"
+  nameKh                String?       @map("name_kh") // e.g. "គ្រួសារ លោក សុខ"
+  category              GuestCategory @default(OTHER)
+  side                  GuestSide?
+  primaryContactGuestId String?       @unique @map("primary_contact_guest_id") @db.Uuid
+  notes                 String?       // internal only
+  archivedAt            DateTime?     @map("archived_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+
+  members        Guest[]      @relation("GroupMembers")
+  primaryContact Guest?       @relation("GroupPrimaryContact", fields: [primaryContactGuestId], references: [id], onDelete: SetNull)
+  invitations    Invitation[]
+
+  @@index([nameEn])
+  @@index([nameKh])
+  @@index([category])
+  @@map("guest_groups")
+}
+
+model Guest {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  nameEn       String?       @map("name_en")
+  nameKh       String?       @map("name_kh") // CHECK: at least one of name_en / name_kh
+  phone        String?
+  email        String?
+  category     GuestCategory @default(OTHER)
+  side         GuestSide?
+  relationship String?       // free text: "Uncle", "University friend"
+  groupId      String?       @map("group_id") @db.Uuid
+  notes        String?       // internal only, never sent to public pages
+  archivedAt   DateTime?     @map("archived_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  group              GuestGroup?  @relation("GroupMembers", fields: [groupId], references: [id], onDelete: Restrict)
+  primaryContactOf   GuestGroup?  @relation("GroupPrimaryContact")
+  invitations        Invitation[] // individual invitations (incl. revoked history)
+  rsvpParticipations RsvpGuest[]
+  wishes             Wish[]
+  gifts              Gift[]
+
+  @@index([nameEn])
+  @@index([nameKh])
+  @@index([groupId])
+  @@index([category])
+  @@index([archivedAt])
+  @@map("guests")
+}
+
+model Invitation {
+  id                  String           @id @default(uuid(7)) @db.Uuid
+  type                InvitationType
+  // Owner XOR — enforced by CHECK constraint (constraints.sql):
+  //   INDIVIDUAL => guest_id NOT NULL AND group_id IS NULL
+  //   FAMILY     => group_id NOT NULL AND guest_id IS NULL
+  guestId             String?          @map("guest_id") @db.Uuid
+  groupId             String?          @map("group_id") @db.Uuid
+  status              InvitationStatus @default(ACTIVE)
+  capacity            Int              @default(1) // max attending people (named + unnamed). CHECK >= 1
+  allowUnnamedGuests  Boolean          @default(false) @map("allow_unnamed_guests") // "+1" seats
+  rsvpDeadlineOverride DateTime?       @map("rsvp_deadline_override") // per-invitation extension
+  preferredLocale     String?          @map("preferred_locale") // 'en' | 'kh' for the QR link
+  internalLabel       String?          @map("internal_label") // e.g. "Table 4 – office"
+  notes               String?
+  firstOpenedAt       DateTime?        @map("first_opened_at")
+  lastOpenedAt        DateTime?        @map("last_opened_at")
+  revokedAt           DateTime?        @map("revoked_at")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  guest      Guest?                @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  group      GuestGroup?           @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  tokens     InvitationToken[]
+  accessLogs InvitationAccessLog[]
+  rsvp       Rsvp?
+  wishes     Wish[]
+  gifts      Gift[]
+  checkIns   GuestCheckIn[]
+
+  @@index([type, status])
+  @@index([guestId])
+  @@index([groupId])
+  @@map("invitations")
+}
+
+/// Token secrets live here, not on Invitation, so rotation keeps history.
+/// Lookup: token_hash = HMAC-SHA256(TOKEN_HASH_PEPPER, rawToken).
+/// Admin re-display: token_ciphertext = AES-256-GCM(TOKEN_ENCRYPTION_KEY, rawToken).
+model InvitationToken {
+  id              String      @id @default(uuid(7)) @db.Uuid
+  invitationId    String      @map("invitation_id") @db.Uuid
+  tokenHash       String      @unique @map("token_hash")
+  tokenCiphertext String?     @map("token_ciphertext") // nulled when ROTATED/REVOKED
+  status          TokenStatus @default(ACTIVE) // partial unique: one ACTIVE per invitation
+  createdAt       DateTime    @default(now()) @map("created_at")
+  rotatedAt       DateTime?   @map("rotated_at")
+  revokedAt       DateTime?   @map("revoked_at")
+  expiresAt       DateTime?   @map("expires_at")
+
+  invitation Invitation            @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  accessLogs InvitationAccessLog[]
+
+  @@index([invitationId])
+  @@map("invitation_tokens")
+}
+
+/// Privacy-conscious: no raw IP, no full user agent, no token.
+model InvitationAccessLog {
+  id            String     @id @default(uuid(7)) @db.Uuid
+  invitationId  String     @map("invitation_id") @db.Uuid
+  tokenId       String     @map("token_id") @db.Uuid
+  kind          AccessKind
+  isLikelyBot   Boolean    @default(false) @map("is_likely_bot") // link-preview crawlers etc.
+  deviceClass   String?    @map("device_class") // "mobile" | "desktop" | "tablet"
+  occurredAt    DateTime   @default(now()) @map("occurred_at")
+
+  invitation Invitation      @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  token      InvitationToken @relation(fields: [tokenId], references: [id], onDelete: Restrict)
+
+  @@index([invitationId, occurredAt])
+  @@index([occurredAt])
+  @@map("invitation_access_logs")
+}
+
+// ----------------------------------------------------------------------------
+// RSVP
+// ----------------------------------------------------------------------------
+
+/// One current RSVP per invitation (unique invitation_id).
+model Rsvp {
+  id               String     @id @default(uuid(7)) @db.Uuid
+  invitationId     String     @unique @map("invitation_id") @db.Uuid
+  status           RsvpStatus
+  unnamedGuests    Int        @default(0) @map("unnamed_guests") // only if invitation.allow_unnamed_guests
+  attendingCount   Int        @default(0) @map("attending_count") // named attending + unnamed; trigger checks <= capacity
+  dietary          String?
+  accessibility    String?
+  note             String?
+  version          Int        @default(1) // optimistic concurrency + history key
+  lastActor        ActorType  @map("last_actor")
+  submittedAt      DateTime   @default(now()) @map("submitted_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+
+  invitation   Invitation    @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  participants RsvpGuest[]
+  history      RsvpHistory[]
+
+  @@index([status])
+  @@map("rsvps")
+}
+
+/// Named participants. Trigger ensures guest belongs to the invitation owner.
+model RsvpGuest {
+  id        String  @id @default(uuid(7)) @db.Uuid
+  rsvpId    String  @map("rsvp_id") @db.Uuid
+  guestId   String  @map("guest_id") @db.Uuid
+  attending Boolean
+  dietary   String?
+
+  rsvp  Rsvp  @relation(fields: [rsvpId], references: [id], onDelete: Cascade)
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Restrict)
+
+  @@unique([rsvpId, guestId])
+  @@index([guestId])
+  @@map("rsvp_guests")
+}
+
+/// Append-only snapshot of every submission/update (names snapshotted too).
+model RsvpHistory {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  rsvpId      String    @map("rsvp_id") @db.Uuid
+  version     Int
+  actor       ActorType
+  adminUserId String?   @map("admin_user_id") @db.Uuid
+  reason      String?   // required for admin overrides
+  snapshot    Json      // { status, participants:[{guestId,name,attending}], unnamedGuests, dietary, ... }
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  rsvp      Rsvp       @relation(fields: [rsvpId], references: [id], onDelete: Restrict)
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@unique([rsvpId, version])
+  @@map("rsvp_history")
+}
+
+// ----------------------------------------------------------------------------
+// Wishes
+// ----------------------------------------------------------------------------
+
+model Wish {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  invitationId    String?        @map("invitation_id") @db.Uuid
+  guestId         String?        @map("guest_id") @db.Uuid
+  authorName      String         @map("author_name") // snapshot, max 80
+  relationship    String?        // max 80
+  message         String         // max 1000, rendered as plain text only
+  originalMessage String?        @map("original_message") // kept when admin edits
+  photoAssetId    String?        @unique @map("photo_asset_id") @db.Uuid
+  visibility      WishVisibility @default(PUBLIC)
+  status          WishStatus     @default(PENDING)
+  contentHash     String         @map("content_hash") // duplicate detection
+  moderatedAt     DateTime?      @map("moderated_at")
+  moderatedById   String?        @map("moderated_by_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  invitation  Invitation? @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  guest       Guest?      @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  photo       MediaAsset? @relation("WishPhoto", fields: [photoAssetId], references: [id], onDelete: SetNull)
+  moderatedBy AdminUser?  @relation("WishModeratedBy", fields: [moderatedById], references: [id], onDelete: Restrict)
+
+  @@index([status, visibility, createdAt])
+  @@index([invitationId])
+  @@index([contentHash])
+  @@map("wishes")
+}
+
+// ----------------------------------------------------------------------------
+// Gifts & payment methods
+// ----------------------------------------------------------------------------
+
+model PaymentMethod {
+  id            String     @id @default(uuid(7)) @db.Uuid
+  method        GiftMethod // KHQR | BANK_TRANSFER (CASH is admin-only, no public method row needed)
+  label         Json       // { en, kh }
+  bankName      String?    @map("bank_name")
+  accountHolder String?    @map("account_holder")
+  accountNumber String?    @map("account_number")
+  currencies    Currency[] // which currencies this account accepts
+  qrAssetId     String?    @unique @map("qr_asset_id") @db.Uuid
+  instructions  Json?      // { en, kh }
+  isActive      Boolean    @default(true) @map("is_active")
+  sortOrder     Int        @default(0) @map("sort_order")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  qrImage MediaAsset? @relation("PaymentQr", fields: [qrAssetId], references: [id], onDelete: SetNull)
+  gifts   Gift[]
+
+  @@map("payment_methods")
+}
+
+model Gift {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  source          GiftSource
+  method          GiftMethod
+  status          GiftStatus @default(PENDING_VERIFICATION)
+  currency        Currency
+  notifiedAmount  Decimal?   @map("notified_amount") @db.Decimal(18, 2) // what the guest SAID they sent
+  receivedAmount  Decimal?   @map("received_amount") @db.Decimal(18, 2) // what admin CONFIRMED; CHECK: VERIFIED => NOT NULL
+  donorName       String     @map("donor_name") // snapshot, survives guest edits
+  invitationId    String?    @map("invitation_id") @db.Uuid // resolved from token server-side
+  guestId         String?    @map("guest_id") @db.Uuid // must belong to invitation owner (service check)
+  paymentMethodId String?    @map("payment_method_id") @db.Uuid
+  transactionRef  String?    @map("transaction_ref")
+  transferredAt   DateTime?  @map("transferred_at") // guest-reported or admin-entered
+  receivedAt      DateTime?  @map("received_at") // cash handed over / confirmed in bank
+  message         String?
+  evidenceAssetId String?    @unique @map("evidence_asset_id") @db.Uuid // private
+  adminNote       String?    @map("admin_note")
+  verifiedAt      DateTime?  @map("verified_at")
+  verifiedById    String?    @map("verified_by_id") @db.Uuid
+  recordedById    String?    @map("recorded_by_id") @db.Uuid // set for ADMIN_RECORD
+  version         Int        @default(1) // optimistic lock for verify/correct
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  invitation    Invitation?    @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  guest         Guest?         @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  paymentMethod PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  evidence      MediaAsset?    @relation("GiftEvidence", fields: [evidenceAssetId], references: [id], onDelete: Restrict)
+  verifiedBy    AdminUser?     @relation("GiftVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  recordedBy    AdminUser?     @relation("GiftRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  events        GiftEvent[]
+
+  @@index([status, currency])
+  @@index([method])
+  @@index([transferredAt])
+  @@index([receivedAt])
+  @@index([invitationId])
+  @@index([createdAt])
+  @@map("gifts")
+}
+
+/// Immutable financial history (UPDATE/DELETE blocked by trigger).
+model GiftEvent {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  giftId      String        @map("gift_id") @db.Uuid
+  type        GiftEventType
+  actor       ActorType
+  adminUserId String?       @map("admin_user_id") @db.Uuid
+  reason      String?       // required for CORRECTED / REOPENED / REJECTED
+  before      Json?         // amounts serialized as strings, never numbers
+  after       Json?
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  gift      Gift       @relation(fields: [giftId], references: [id], onDelete: Restrict)
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([giftId, createdAt])
+  @@map("gift_events")
+}
+
+// ----------------------------------------------------------------------------
+// Wedding content
+// ----------------------------------------------------------------------------
+
+/// Singleton row (id = 1, CHECK enforced).
+model WeddingSettings {
+  id                   Int       @id @default(1)
+  groomName            Json      @map("groom_name") // { en, kh } — en left blank until couple sets it
+  brideName            Json      @map("bride_name")
+  weddingDate          DateTime? @map("wedding_date") // UTC instant of main ceremony; null = "date to be announced"
+  timeZone             String    @default("Asia/Phnom_Penh") @map("time_zone")
+  invitationMessage    Json?     @map("invitation_message")
+  postWeddingMessage   Json?     @map("post_wedding_message")
+  story                Json?     // { groomIntro, brideIntro, howWeMet, journey, engagement } each { en, kh }
+  heroAssetId          String?   @map("hero_asset_id") @db.Uuid
+  groomPortraitAssetId String?   @map("groom_portrait_asset_id") @db.Uuid
+  bridePortraitAssetId String?   @map("bride_portrait_asset_id") @db.Uuid
+  rsvpDeadline         DateTime? @map("rsvp_deadline")
+  rsvpAllowMaybe       Boolean   @default(false) @map("rsvp_allow_maybe")
+  wishesPublicEnabled  Boolean   @default(true) @map("wishes_public_enabled")
+  wishPhotosEnabled    Boolean   @default(false) @map("wish_photos_enabled")
+  giftEvidenceEnabled  Boolean   @default(true) @map("gift_evidence_enabled")
+  giftThankYou         Json?     @map("gift_thank_you")
+  contacts             Json?     // [{ label:{en,kh}, phone, telegram? }]
+  sectionVisibility    Json      @default("{}") @map("section_visibility") // { story:true, gallery:true, gifts:true, ... }
+  musicAssetId         String?   @map("music_asset_id") @db.Uuid // optional background music
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+  updatedById          String?   @map("updated_by_id") @db.Uuid
+
+  updatedBy AdminUser? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("wedding_settings")
+}
+
+model StoryMilestone {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  occurredOn   DateTime?     @map("occurred_on") @db.Date
+  title        Json
+  body         Json?
+  imageAssetId String?       @map("image_asset_id") @db.Uuid
+  status       PublishStatus @default(DRAFT)
+  sortOrder    Int           @default(0) @map("sort_order")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@map("story_milestones")
+}
+
+model WeddingLocation {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  name         Json
+  address      Json
+  imageAssetId String?       @map("image_asset_id") @db.Uuid
+  mapUrl       String?       @map("map_url") // Google Maps share link (directions button)
+  mapEmbedUrl  String?       @map("map_embed_url") // validated against allow-listed hosts
+  latitude     Decimal?      @db.Decimal(9, 6)
+  longitude    Decimal?      @db.Decimal(9, 6)
+  parking      Json?
+  access       Json?
+  status       PublishStatus @default(DRAFT)
+  sortOrder    Int           @default(0) @map("sort_order")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  events WeddingEvent[]
+
+  @@index([status, sortOrder])
+  @@map("wedding_locations")
+}
+
+model WeddingEvent {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  title        Json
+  description  Json?
+  startsAt     DateTime      @map("starts_at")
+  endsAt       DateTime?     @map("ends_at") // CHECK ends_at > starts_at
+  locationId   String?       @map("location_id") @db.Uuid
+  dressCode    Json?         @map("dress_code")
+  instructions Json?
+  status       PublishStatus @default(DRAFT)
+  sortOrder    Int           @default(0) @map("sort_order")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  location WeddingLocation? @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@index([startsAt])
+  @@index([status, sortOrder])
+  @@map("wedding_events")
+}
+
+// ----------------------------------------------------------------------------
+// Gallery & media
+// ----------------------------------------------------------------------------
+
+/// Every Cloudinary upload is tracked here first (PENDING), then ATTACHED.
+/// A cleanup job deletes PENDING assets older than 24h from Cloudinary.
+model MediaAsset {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  purpose      MediaPurpose
+  status       MediaStatus  @default(PENDING)
+  publicId     String       @unique @map("public_id") // Cloudinary public_id
+  deliveryType String       @default("upload") @map("delivery_type") // "upload" | "authenticated"
+  format       String
+  bytes        Int
+  width        Int?
+  height       Int?
+  createdAt    DateTime     @default(now()) @map("created_at")
+  deletedAt    DateTime?    @map("deleted_at")
+
+  photo         Photo?
+  wish          Wish?          @relation("WishPhoto")
+  giftEvidence  Gift?          @relation("GiftEvidence")
+  paymentQr     PaymentMethod? @relation("PaymentQr")
+
+  @@index([status, createdAt])
+  @@map("media_assets")
+}
+
+model PhotoAlbum {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  slug         String          @unique
+  title        Json
+  description  Json?
+  coverPhotoId String?         @unique @map("cover_photo_id") @db.Uuid
+  visibility   AlbumVisibility @default(UNPUBLISHED)
+  sortOrder    Int             @default(0) @map("sort_order")
+  archivedAt   DateTime?       @map("archived_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  photos     Photo[] @relation("AlbumPhotos")
+  coverPhoto Photo?  @relation("AlbumCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+
+  @@index([visibility, sortOrder])
+  @@map("photo_albums")
+}
+
+model Photo {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  albumId   String    @map("album_id") @db.Uuid
+  assetId   String    @unique @map("asset_id") @db.Uuid
+  caption   Json?
+  alt       Json?
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  album   PhotoAlbum  @relation("AlbumPhotos", fields: [albumId], references: [id], onDelete: Restrict)
+  asset   MediaAsset  @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  coverOf PhotoAlbum? @relation("AlbumCover")
+
+  @@index([albumId, sortOrder])
+  @@map("photos")
+}
+
+// ----------------------------------------------------------------------------
+// Check-in, audit, rate limiting
+// ----------------------------------------------------------------------------
+
+model GuestCheckIn {
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  invitationId        String    @map("invitation_id") @db.Uuid
+  displayNameSnapshot String    @map("display_name_snapshot")
+  arrivedCount        Int       @map("arrived_count") // CHECK >= 1
+  isOverride          Boolean   @default(false) @map("is_override")
+  overrideReason      String?   @map("override_reason") // CHECK: is_override => reason NOT NULL
+  note                String?
+  checkedInAt         DateTime  @default(now()) @map("checked_in_at")
+  checkedInById       String    @map("checked_in_by_id") @db.Uuid
+  voidedAt            DateTime? @map("voided_at")
+  voidReason          String?   @map("void_reason")
+  voidedById          String?   @map("voided_by_id") @db.Uuid
+
+  invitation  Invitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  checkedInBy AdminUser  @relation("CheckInBy", fields: [checkedInById], references: [id], onDelete: Restrict)
+  voidedBy    AdminUser? @relation("CheckInVoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
+
+  @@index([invitationId])
+  @@index([checkedInAt])
+  @@map("guest_check_ins")
+}
+
+/// Append-only (UPDATE/DELETE blocked by trigger).
+model AuditLog {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  adminUserId String?  @map("admin_user_id") @db.Uuid
+  actorLabel  String   @map("actor_label") // "Shared couple account" — NOT an individual
+  action      String   // namespaced: "auth.login", "gift.verify", "invitation.token.rotate"
+  entityType  String   @map("entity_type")
+  entityId    String?  @map("entity_id")
+  metadata    Json?    // redacted before/after diff; never tokens/passwords/session ids
+  ipHash      String?  @map("ip_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+/// Fixed-window rate limiter stored in Postgres (works on serverless, no Redis needed).
+model RateLimitBucket {
+  key         String   @id // e.g. "login:<ipHash>", "wish:<invitationId>"
+  windowStart DateTime @map("window_start")
+  count       Int
+  expiresAt   DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("rate_limit_buckets")
+}

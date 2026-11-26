@@ -1,0 +1,27 @@
+# Local development + test database. Not used in production.
+# Start:  docker compose up -d
+# Stop:   docker compose down        (data kept in the named volume)
+# Reset:  docker compose down -v     (DELETES local data)
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: wedding-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wedding
+      POSTGRES_PASSWORD: wedding_local_dev_only
+      POSTGRES_DB: wedding_dev
+      TZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - wedding_pg:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wedding -d wedding_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  wedding_pg:
