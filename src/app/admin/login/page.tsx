@@ -5,7 +5,7 @@ import { AdminLanguageSwitcher } from "@/components/admin/admin-language-switche
 import { Ornament } from "@/components/wedding/ornament";
 import { getAdminContext } from "@/server/policies/admin";
 import { LoginForm } from "./login-form";
-
+import "dotenv/config";
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("Admin.login");
   return { title: t("title") };
@@ -14,6 +14,9 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function LoginPage() {
   if (await getAdminContext()) redirect("/admin/dashboard");
   const t = await getTranslations("Admin.login");
+  if (process.env.mode !== "production") {
+    console.log("DATABASE_URL", process.env.DATABASE_URL);
+  }
   return (
     <main id="main" className="flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-ivory to-lavender px-4 py-12">
       <div className="absolute top-4 right-4">
