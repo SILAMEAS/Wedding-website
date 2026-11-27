@@ -17,6 +17,7 @@ export default async function LoginPage() {
   if (process.env.mode !== "production") {
     console.log("DATABASE_URL", process.env.DATABASE_URL);
   }
+  console.log("DIRECT_URL");
   return (
     <main id="main" className="flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-ivory to-lavender px-4 py-12">
       <div className="absolute top-4 right-4">
